@@ -5,83 +5,154 @@
 #include<netdb.h>
 #include<stdio.h>
 #include<string.h>
-#include<errno.h>
+#include<error.h>
 #include<unistd.h>
+#include<ctype.h>
+
 #define BUF_LEN 48
+
+char encypt_char(char c, int k)
+{
+	if (isalpha(c))
+	{
+		if (isupper(c))
+		{
+		 	c -= 'A';
+			c += k % 26;
+			c += 'A';
+		}
+		else
+		{
+		 	c -= 'a';
+			c += k % 26;
+			c += 'a';
+		}
+	}
+		
+	return c;
+}
+
+int process_string(char *instr, char *outstr)
+{
+
+	int i, len;
+	
+	len=strlen(instr);
+
+	for(int i=0;i<len;i++)
+	{
+		outstr[i]=encypt_char(instr[i], 3);
+	}
+
+	outstr[len]='\0';
+
+	return len;
+}
 
 int main(int argc, char *argv[])
 {
-	int csd;                  	/* client socket descriptor               */
-	struct sockaddr_in server; 	/* server address structure               */
-	struct hostent *server_host;	/* pointer to server host details 
-		                      	   structure returned by resolver         */
-	int server_len;         	/* size of above structure                */
-	int string_size;            	/* size of send string including
-		                           trailing nul                           */
-	short server_port;              /* servers port number                    */
-	int out_cnt, in_cnt;      	/* byte counts for send and receive       */
-	char client_send_string[BUF_LEN];/* buffer to hold send string             */
-	char server_reversed_string[BUF_LEN];/* buffer to hold recieve string          */
-
+	int ssd;                    /* server socket descriptor               */
+	struct sockaddr_in server;  /* server address structure               */
+	struct sockaddr_in client;  /* client address structure               */
+	int client_len;             /* size of above client structure         */
+	short echo_port;            /* servers port number                    */
+	int max_iterations;         /* maximum iterations to perform          */
+	int out_cnt, in_cnt;        /* byte counts for send and receive       */
+	int recv_cnt, i;            /* more counters                          */
+	char client_string[BUF_LEN];/* buffer to hold send string             */
+	char server_reversed_string[BUF_LEN];
+				    /* buffer to hold recieve string          */
+	int ret_code;               /* generic return code holder             */
 	/* Check for correct command line usage */
-	if (argc!=4)
+	if (argc!=3)
 	{
-		fprintf(stderr,"Usage: %s Server Port send_string\n",argv[0]);
-		exit(EXIT_FAILURE);
+	fprintf(stderr,"Usage: %s Port max_iterations\n",argv[0]);
+	exit(EXIT_FAILURE);
 	}
 	/* Grab the command line arguments and decode them */
-
-	/* Use the resolver to get the addresss of the server */
-	server_host=gethostbyname(argv[1]);
+	echo_port=atoi(argv[1]);
+	max_iterations=atoi(argv[2]);
+	/* create the socket 
+	   a socket descriptor that identifies the socket is returned,
+	   the socket descriptor is anagolous to a file descriptor.
+	   PF_INET: The Internet (TCP/IP) family.
+	   SOCK_DGRAM: the type of service required − datagram
+	   17: the UDP protocol (see /etc/protocols)
+	       this parameter can be used to specify which protocol in the
+	       family to use for the service, but for the Internet Protocol
+	       family only the UDP protocol supports the datagram service,
+	       so a 0 could have been used.
+	*/
+	ssd=socket(PF_INET, SOCK_DGRAM, 17);
 	/* if there’s a problem, report it and exit */
-	if (server_host == NULL)
+	if
+	(ssd<0)
 	{
-		herror("While calling gethostbyname()");
-		exit(EXIT_FAILURE);
+	perror("While calling socket()");
+	exit(EXIT_FAILURE);
 	}
-
-	server_port=atoi(argv[2]);
-	strcpy(client_send_string,argv[3]);/* create the socket */
-	csd=socket(PF_INET, SOCK_DGRAM, 0);
-	/* if there’s a problem, report it and exit */
-	if (csd<0)
-	{
-		perror("While calling socket()");
-		exit(EXIT_FAILURE);
-	}
-	/* we haven’t bound the socket to an address or port
-	   let the system decide what’s best */
-	/* set up the server address details in preparation for sending
-	   the message */
+	/* set up the server address details in order to bind them to a 
+	   specified socket:
+	    *  use the Internet (TCP/IP) address family;
+	    *  use INADDR_ANY, this allows the server to receive messages sent
+	       to any of its interfaces (Machine IP addresses), this is useful
+	       for gateway machines and multi−homed hosts;
+	    *  convet the port number from (h)ost (to) (n)etwork order, there
+	       is sometimes a difference.
+	*/
 	server.sin_family=AF_INET;
-	memcpy(&server.sin_addr.s_addr,server_host->h_addr_list[0],
-	server_host->h_length);
-	server.sin_port=htons(server_port);
-	/* set the length so that the trailing nul gets sent as well */
-	string_size=strlen(client_send_string)+1;
-	/* send the message off to the server */
-	out_cnt=sendto(csd, client_send_string, string_size, 0, 
-		(struct sockaddr *)&server, sizeof(server));
-	/* the 0 if for flags that we don’t use here */
-	/* if there’s a problem, report it and exit */
+	server.sin_addr.s_addr=htonl(INADDR_ANY);
+	server.sin_port=htons(echo_port);
+	/* bind the details in the server sockaddr_in structure to the socket */
+	ret_code=bind(ssd, (struct sockaddr *)&server, sizeof(server));
+	if(ret_code<0)
+	{perror("While calling bind()");
+	exit(EXIT_FAILURE);
+	}
+	/* Normally a server will serve forever, but this example puts a limit
+	   on the number of requests (max_iterations) to limit its lifetime 
+	   so typically the for loop would be for(;;) or while(1) instead of 
+	   whats below.
+	*/
+	for
+	(i=0;i<max_iterations;i++)
+	{
+	fprintf(stderr,"Iteration %d of %d. Waiting for client...\n",
+	i+1, max_iterations);
+	client_len=sizeof(client);
+	/* The following recvfrom() system call will block until a
+	    message arrives from a client. The details of the client
+	    will be stored in the UDP datagram will be put into the
+	    client address structure, and can be used for later
+	    replies to the client.
+	*/
+	in_cnt=recvfrom(ssd, client_string, BUF_LEN, 0,
+	(struct sockaddr *)&client,(socklen_t *)&client_len);
+	if(in_cnt<0)
+	{
+	perror("While calling recvfrom()");
+	exit(EXIT_FAILURE);
+	}
+	fprintf(stderr,"Message received is %d bytes long\n", in_cnt);
+	fprintf(stderr,"Message received is \"%s\"\n", client_string);
+	/* reverse the string */
+	recv_cnt=process_string(client_string, server_reversed_string);
+	fprintf(stderr,"Processed string is %d bytes long\n", recv_cnt);
+	fprintf(stderr,"Processed string is \"%s\"\n",server_reversed_string);
+	/* send the processed data back to the client,
+	   to send a string we need to include the nul on the end,
+	   hence the +1
+	*/
+	out_cnt=sendto(ssd, server_reversed_string, recv_cnt+1, 0,
+		(struct sockaddr *)&client, sizeof(client));
 	if (out_cnt<0)
 	{
-		perror("While calling sendto()");
-		exit(EXIT_FAILURE);
+	perror("While calling sendto()");
+	exit(EXIT_FAILURE);
 	}
-	fprintf(stderr,"You have sent \"%s\"\n",client_send_string);
-	fprintf(stderr,"Have reached recvfrom(), should now block until message receipt\n");
-	/* get the response from the server and print it */
-	server_len=sizeof(server);
-	in_cnt=recvfrom(csd, server_reversed_string, BUF_LEN, 0, 
-	( struct sockaddr *)&server,(socklen_t *)&server_len);
-	/* if there’s a problem, report it and exit */
-	if (in_cnt<0)
-	{
-		perror("While calling recvfrom()");
-		exit(EXIT_FAILURE);
+	fprintf(stderr,"Client request now seviced reply sent.\n");
 	}
-	fprintf(stderr,"The server has responded with: \"%s\"\n",server_reversed_string);
-	/* close the socket now */
-	close(csd);
+	close(ssd);
+	fprintf(stderr,"Server has shut down\n");
+	return 0;
 }
